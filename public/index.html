@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extension Authentication</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            width: 100%;
+            max-width: 400px;
+            padding: 40px;
+        }
+        .form-container {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        h2 { text-align: center; color: #333; margin-bottom: 20px; }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input:focus { outline: none; border-color: #667eea; }
+        button {
+            background: #667eea;
+            color: white;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 16px;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        button:hover { background: #5a67d8; }
+        .switch-btn {
+            background: none;
+            color: #667eea;
+            margin-top: 10px;
+        }
+        .switch-btn:hover { background: none; text-decoration: underline; }
+        .message {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-top: 10px;
+        }
+        .error { background: #fee; color: #c33; }
+        .success { background: #efe; color: #3c3; }
+        .hidden { display: none; }
+        .extension-status {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f7f7f7;
+            border-radius: 8px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="loginForm" class="form-container">
+            <h2>Login to Extension</h2>
+            <input type="text" id="loginUsername" placeholder="Username or Email" autocomplete="username">
+            <input type="password" id="loginPassword" placeholder="Password" autocomplete="current-password">
+            <button onclick="login()">Login</button>
+            <button class="switch-btn" onclick="showRegister()">Need an account? Register</button>
+            <div id="loginMessage" class="message hidden"></div>
+        </div>
+
+        <div id="registerForm" class="form-container hidden">
+            <h2>Register for Extension</h2>
+            <input type="text" id="regUsername" placeholder="Username" autocomplete="username">
+            <input type="email" id="regEmail" placeholder="Email" autocomplete="email">
+            <input type="password" id="regPassword" placeholder="Password" autocomplete="new-password">
+            <button onclick="register()">Register</button>
+            <button class="switch-btn" onclick="showLogin()">Already have an account? Login</button>
+            <div id="registerMessage" class="message hidden"></div>
+        </div>
+
+        <div id="extensionStatus" class="extension-status">
+            <strong>Extension Status:</strong> <span id="statusText">Not authenticated</span>
+            <button onclick="testExtensionAuth()" style="margin-top: 10px; background: #48bb78;">Test Extension Auth</button>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:3000/api';
+        
+        // Store token in localStorage
+        function storeToken(token, user) {
+            localStorage.setItem('extension_token', token);
+            localStorage.setItem('extension_user', JSON.stringify(user));
+        }
+        
+        function getToken() {
+            return localStorage.getItem('extension_token');
+        }
+        
+        async function login() {
+            const username = document.getElementById('loginUsername').value;
+            const password = document.getElementById('loginPassword').value;
+            const messageDiv = document.getElementById('loginMessage');
+            
+            try {
+                const response = await fetch(`${API_URL}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    storeToken(data.token, data.user);
+                    showMessage(messageDiv, 'Login successful! Token saved.', 'success');
+                    updateExtensionStatus(true);
+                    setTimeout(() => {
+                        // Close popup or redirect as needed
+                        window.location.href = 'success.html';
+                    }, 1500);
+                } else {
+                    showMessage(messageDiv, data.error || 'Login failed', 'error');
+                }
+            } catch (error) {
+                showMessage(messageDiv, 'Server error. Is the server running?', 'error');
+            }
+        }
+        
+        async function register() {
+            const username = document.getElementById('regUsername').value;
+            const email = document.getElementById('regEmail').value;
+            const password = document.getElementById('regPassword').value;
+            const messageDiv = document.getElementById('registerMessage');
+            
+            try {
+                const response = await fetch(`${API_URL}/register`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username, email, password })
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    storeToken(data.token, data.user);
+                    showMessage(messageDiv, 'Registration successful! Token saved.', 'success');
+                    updateExtensionStatus(true);
+                    setTimeout(() => showLogin(), 1500);
+                } else {
+                    showMessage(messageDiv, data.error || 'Registration failed', 'error');
+                }
+            } catch (error) {
+                showMessage(messageDiv, 'Server error. Is the server running?', 'error');
+            }
+        }
+        
+        async function testExtensionAuth() {
+            const token = getToken();
+            if (!token) {
+                alert('No token found. Please login or register first.');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_URL}/verify`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                
+                const data = await response.json();
+                if (data.valid) {
+                    alert(`Token valid! Welcome ${data.user.username}`);
+                } else {
+                    alert('Token invalid. Please login again.');
+                    localStorage.removeItem('extension_token');
+                    updateExtensionStatus(false);
+                }
+            } catch (error) {
+                alert('Server error. Is the server running?');
+            }
+        }
+        
+        function updateExtensionStatus(isAuthenticated) {
+            const statusSpan = document.getElementById('statusText');
+            if (isAuthenticated) {
+                const user = JSON.parse(localStorage.getItem('extension_user') || '{}');
+                statusSpan.innerHTML = `✅ Authenticated as ${user.username || 'user'}`;
+            } else {
+                statusSpan.innerHTML = '❌ Not authenticated';
+            }
+        }
+        
+        function showMessage(element, text, type) {
+            element.textContent = text;
+            element.className = `message ${type}`;
+            element.classList.remove('hidden');
+            setTimeout(() => element.classList.add('hidden'), 3000);
+        }
+        
+        function showRegister() {
+            document.getElementById('loginForm').classList.add('hidden');
+            document.getElementById('registerForm').classList.remove('hidden');
+        }
+        
+        function showLogin() {
+            document.getElementById('registerForm').classList.add('hidden');
+            document.getElementById('loginForm').classList.remove('hidden');
+        }
+        
+        // Check existing token on load
+        if (getToken()) {
+            updateExtensionStatus(true);
+            testExtensionAuth(); // Verify token validity
+        }
+    </script>
+</body>
+</html>
