@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const sqlite3 = require('sqlite3').verbose();
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const path = require('path');
@@ -15,25 +15,31 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static('public'));
 
-// Initialize SQLite database
-const db = new sqlite3.Database('./users.db');
+// PostgreSQL connection
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
 
 // Create users table
-db.run(`
-  CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT UNIQUE NOT NULL,
-    email TEXT UNIQUE NOT NULL,
-    password TEXT NOT NULL,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  )
-`, (err) => {
-  if (err) {
+const initDb = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Database ready');
+  } catch (err) {
     console.error('Database error:', err);
-  } else {
-    console.log('Database ready');
   }
-});
+};
+
+initDb();
 
 // Registration endpoint
 app.post('/api/register', async (req, res) => {
@@ -46,42 +52,42 @@ app.post('/api/register', async (req, res) => {
   try {
     const hashedPassword = await bcrypt.hash(password, 10);
     
-    db.run(
-      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
-      [username, email, hashedPassword],
-      function(err) {
-        if (err) {
-          if (err.message.includes('UNIQUE')) {
-            return res.status(400).json({ error: 'Username or email already exists' });
-          }
-          return res.status(500).json({ error: err.message });
-        }
-        
-        const token = jwt.sign({ id: this.lastID, username, email }, JWT_SECRET, { expiresIn: '24h' });
-        res.json({ 
-          success: true, 
-          token, 
-          user: { id: this.lastID, username, email }
-        });
-      }
+    const result = await pool.query(
+      'INSERT INTO users (username, email, password) VALUES ($1, $2, $3) RETURNING id, username, email',
+      [username, email, hashedPassword]
     );
-  } catch (error) {
+    
+    const user = result.rows[0];
+    const token = jwt.sign({ id: user.id, username: user.username, email: user.email }, JWT_SECRET, { expiresIn: '24h' });
+    
+    res.json({ 
+      success: true, 
+      token, 
+      user: { id: user.id, username: user.username, email: user.email }
+    });
+  } catch (err) {
+    if (err.constraint === 'users_username_key' || err.constraint === 'users_email_key') {
+      return res.status(400).json({ error: 'Username or email already exists' });
+    }
     res.status(500).json({ error: 'Server error' });
   }
 });
 
 // Login endpoint
-app.post('/api/login', (req, res) => {
+app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   
   if (!username || !password) {
     return res.status(400).json({ error: 'Username and password required' });
   }
   
-  db.get('SELECT * FROM users WHERE username = ? OR email = ?', [username, username], async (err, user) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
+  try {
+    const result = await pool.query(
+      'SELECT * FROM users WHERE username = $1 OR email = $1',
+      [username]
+    );
+    
+    const user = result.rows[0];
     
     if (!user) {
       return res.status(401).json({ error: 'Invalid credentials' });
@@ -98,10 +104,12 @@ app.post('/api/login', (req, res) => {
       token, 
       user: { id: user.id, username: user.username, email: user.email }
     });
-  });
+  } catch (err) {
+    res.status(500).json({ error: 'Server error' });
+  }
 });
 
-// Verify token endpoint (for extension)
+// Verify token endpoint
 app.post('/api/verify', (req, res) => {
   const token = req.headers.authorization?.split(' ')[1];
   
@@ -116,6 +124,11 @@ app.post('/api/verify', (req, res) => {
     
     res.json({ valid: true, user: decoded });
   });
+});
+
+// Health check endpoint (prevents sleeping)
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
 // Start server
